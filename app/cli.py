@@ -1,7 +1,7 @@
 """Operator CLI.
 
 Commands land as the steps do:
-  Step 3   seed-dev      create a local institution with users
+  Step 3   seed-dev      create a local institution with users  <- done
   Step 4   rotate-key    generate / promote / retire a signing key
   Step 8   create-tenant provision an institution and its first admin
 
@@ -88,6 +88,132 @@ def db_check() -> None:
         return 0
 
     raise typer.Exit(asyncio.run(_check()))
+
+
+# ── Seeding ─────────────────────────────────────────────────────────────────
+
+# Invented people. This project never holds real credentials, and a seeder is
+# exactly where a "just this once" copy of a real export would end up -- so the
+# names live here, in source, where that cannot happen by accident.
+SEED_USERS = [
+    ("admin@springfield.example.com", "Seymour Skinner", "admin"),
+    ("teacher@springfield.example.com", "Edna Krabappel", "teacher"),
+    ("tutor@springfield.example.com", "Elizabeth Hoover", "tutor"),
+]
+
+
+@app.command("seed-dev")
+def seed_dev(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print exactly what would be written. Touches no database."
+    ),
+) -> None:
+    """Create a development institution with one user per role.
+
+    Runs through the same services the HTTP API does, so the rows it writes obey
+    every rule the API enforces -- normalisation, uniqueness, Argon2 parameters,
+    audit -- rather than being INSERTed past them.
+
+    `--dry-run` is the half that works with no database, and it is not a
+    courtesy: the provisioning planner is pure, so this prints the real plan
+    rather than an approximation of it.
+    """
+    import uuid
+
+    from app.core.scopes import ROLE_TEMPLATE_SCOPES
+    from app.services.provisioning import plan_tenant_roles
+
+    if settings.app_env == "prod":
+        # A seeder pointed at production is one mistyped environment variable
+        # away at all times, and it writes credentials.
+        typer.secho("refusing to seed a production environment", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    slug = settings.dev_seed_tenant_slug
+    password = settings.dev_seed_password
+
+    if dry_run:
+        plan = plan_tenant_roles(uuid.uuid4())
+        typer.secho(f"would seed institution {slug!r}", fg=typer.colors.GREEN)
+        for line in plan.describe():
+            typer.echo(line)
+        for email, name, role in SEED_USERS:
+            typer.echo(f"  user {email:<36} {name:<18} role={role}")
+        typer.echo("")
+        typer.echo(f"{len(plan.roles)} roles, {len(SEED_USERS)} users, 0 written")
+        raise typer.Exit(0)
+
+    if not password:
+        typer.secho("DEV_SEED_PASSWORD is unset. Set it, or use --dry-run.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    from app.core.db import SessionLocal, engine
+    from app.core.errors import Conflict
+    from app.models.tenant import Tenant
+    from app.repositories.role import SqlRoleRepository
+    from app.repositories.tenant import SqlTenantRepository
+    from app.repositories.user import SqlUserRepository
+    from app.schemas.user import UserCreate
+    from app.services.audit import SqlAuditSink
+    from app.services.password_service import get_password_service
+    from app.services.user_service import UserService
+
+    async def _seed() -> int:
+        created = {"tenants": 0, "roles": 0, "users": 0}
+        async with SessionLocal() as session:
+            tenants = SqlTenantRepository(session)
+            tenant = await tenants.by_slug(slug)
+            if tenant is None:
+                tenant = await tenants.add(
+                    Tenant(
+                        id=uuid.uuid4(),
+                        slug=slug,
+                        name=slug.replace("-", " ").title(),
+                        status="active",
+                        settings={},
+                    )
+                )
+                created["tenants"] += 1
+
+            roles = SqlRoleRepository(session, tenant.id)
+            existing = {r.key for r in await roles.list()}
+            for role_plan in plan_tenant_roles(tenant.id).roles:
+                if role_plan.key in existing:
+                    continue
+                await roles.add(role_plan.role)
+                for role_scope in role_plan.scopes:
+                    await roles.add_scope(role_scope)
+                created["roles"] += 1
+
+            service = UserService(
+                SqlUserRepository(session, tenant.id),
+                roles,
+                get_password_service(),
+                SqlAuditSink(session),
+                tenant.id,
+            )
+            for email, name, role in SEED_USERS:
+                try:
+                    await service.create(
+                        UserCreate(email=email, password=password, full_name=name, role_keys=[role])
+                    )
+                    created["users"] += 1
+                except Conflict:
+                    # Re-running the seeder is normal; it tops up rather than
+                    # failing halfway and leaving a partial institution.
+                    continue
+
+            await session.commit()
+
+        typer.secho(f"seeded {slug}", fg=typer.colors.GREEN)
+        for label, count in created.items():
+            typer.echo(f"  {label:<8}: {count} new")
+        typer.echo("")
+        typer.echo(f"roles available: {', '.join(sorted(ROLE_TEMPLATE_SCOPES))}")
+        await engine.dispose()
+        return 0
+
+    raise typer.Exit(asyncio.run(_seed()))
 
 
 if __name__ == "__main__":

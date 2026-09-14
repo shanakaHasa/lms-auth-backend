@@ -1,4 +1,4 @@
-.PHONY: help venv lock api migrate revision downgrade seed drift test test-unit test-int lint fmt typecheck check db-check clean
+.PHONY: help venv lock api migrate revision downgrade seed seed-dry drift test test-unit test-int lint fmt typecheck check db-check clean
 
 # Cross-platform: GNU Make sets OS=Windows_NT on Windows. Without this, every
 # target is unusable on Linux -- which is where CI runs.
@@ -37,8 +37,10 @@ revision:  ## Autogenerate a migration: make revision m="add x"
 downgrade: ## Roll back one migration
 	$(PY) -m alembic downgrade -1
 
-seed:      ## Seed a local institution with users
+seed:      ## Seed a local institution with users -- needs a database
 	$(PY) -m app.cli seed-dev
+seed-dry:  ## Print what seed-dev would write, touching no database
+	$(PY) -m app.cli seed-dev --dry-run
 
 # ── Quality ─────────────────────────────────────────────────────────────────
 

@@ -58,7 +58,10 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         response.headers["x-request-id"] = request_id
         for header, value in SECURITY_HEADERS.items():
             response.headers.setdefault(header, value)
-        if settings.cookie_secure:
+        # Gated on the environment, not on cookie_secure. Those were the same
+        # thing only by accident, and Secure cookies are correct on
+        # http://localhost while HSTS on plain http is meaningless.
+        if not settings.is_local:
             response.headers.setdefault(
                 "Strict-Transport-Security",
                 "max-age=63072000; includeSubDomains; preload",

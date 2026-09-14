@@ -22,6 +22,7 @@ from app.core.config import settings
 from app.core.db import SessionLocal, get_session
 from app.core.logging import get_logger
 from app.crypto.keywrap import resolve_kek
+from app.repositories.refresh_token import SqlRefreshTokenRepository
 from app.repositories.role import SqlRoleRepository
 from app.repositories.signing_key import SqlSigningKeyRepository
 from app.repositories.tenant import SqlTenantRepository
@@ -31,6 +32,7 @@ from app.services.audit_independent import IndependentAuditSink
 from app.services.key_service import KeyService
 from app.services.login_service import LoginService
 from app.services.password_service import get_password_service
+from app.services.refresh_service import RefreshService
 from app.services.token_service import TokenService
 
 log = get_logger(__name__)
@@ -81,3 +83,33 @@ async def get_login_service(session: DbSession) -> LoginService:
 
 
 LoginServiceDep = Annotated[LoginService, Depends(get_login_service)]
+
+
+async def get_refresh_service(session: DbSession) -> RefreshService:
+    """Shares the request's session, so rotation and its audit row commit together.
+
+    A refresh that issued a new token but lost the row recording the old one as
+    used would silently disable reuse detection for that family.
+    """
+    keys = get_key_service(session)
+    tokens = TokenService(
+        await keys.active_signer(),
+        issuer=settings.issuer,
+        audience=settings.audience,
+        ttl_seconds=settings.access_token_ttl_seconds,
+    )
+    return RefreshService(
+        SqlRefreshTokenRepository(session),
+        SqlTenantRepository(session),
+        lambda tenant_id: SqlUserRepository(session, tenant_id),
+        lambda tenant_id: SqlRoleRepository(session, tenant_id),
+        tokens,
+        SqlAuditSink(session),
+        SessionLocal,
+        idle_ttl_seconds=settings.refresh_idle_ttl_seconds,
+        absolute_ttl_seconds=settings.refresh_absolute_ttl_seconds,
+        grace_seconds=settings.refresh_grace_seconds,
+    )
+
+
+RefreshServiceDep = Annotated[RefreshService, Depends(get_refresh_service)]

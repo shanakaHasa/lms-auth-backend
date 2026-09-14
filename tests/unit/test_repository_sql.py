@@ -20,18 +20,23 @@ from __future__ import annotations
 import importlib
 import pkgutil
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.sql import Select
 
 import app.repositories as repositories_pkg
+from app.repositories import refresh_token as refresh_repo
 from app.repositories import role as role_repo
 from app.repositories import signing_key as key_repo
 from app.repositories import tenant as tenant_repo
 from app.repositories import user as user_repo
 
 TENANT = uuid.UUID("11111111-1111-4111-8111-111111111111")
+TOKEN_ID = uuid.UUID("33333333-3333-4333-8333-333333333333")
+FAMILY_ID = uuid.UUID("44444444-4444-4444-8444-444444444444")
+NOW = datetime(2026, 1, 1, tzinfo=UTC)
 USER = uuid.UUID("22222222-2222-4222-8222-222222222222")
 
 
@@ -70,6 +75,14 @@ GLOBAL = {
     "signing_key.stmt_active_key": key_repo.stmt_active_key(),
     "signing_key.stmt_published_keys": key_repo.stmt_published_keys(),
     "signing_key.stmt_key_by_kid": key_repo.stmt_key_by_kid("abc"),
+    # Refresh tokens are addressed by their own id and family, never by a
+    # tenant -- the token IS the credential, and scoping the lookup by
+    # tenant would mean trusting a tenant the caller has not yet proven.
+    "refresh_token.stmt_redeem": refresh_repo.stmt_redeem(TOKEN_ID, NOW),
+    "refresh_token.stmt_find_used": refresh_repo.stmt_find_used(TOKEN_ID),
+    "refresh_token.stmt_revoke_family": refresh_repo.stmt_revoke_family(
+        FAMILY_ID, NOW, "reuse_detected"
+    ),
 }
 
 
@@ -101,8 +114,12 @@ def test_global_statements_carry_no_tenant(name: str) -> None:
 
     A tenant filter added to a global query does not fail loudly — it returns
     nothing, and the symptom is "login says my institution does not exist".
+
+    Checked against the WHERE clause alone: `tenant_id` appears in the selected
+    and RETURNING columns of several of these, which is fine. What must not
+    appear is a tenant *predicate*.
     """
-    assert "tenant_id" not in sql(GLOBAL[name])
+    assert "tenant_id" not in _where(sql(GLOBAL[name]))
 
 
 # ── Soft deletion ───────────────────────────────────────────────────────────
@@ -181,7 +198,7 @@ def test_scope_resolution_returns_scope_keys_not_roles() -> None:
 
 def _where(rendered: str) -> str:
     body = rendered.split("WHERE ", 1)[1]
-    for tail in (" ORDER BY ", " LIMIT ", " OFFSET "):
+    for tail in (" ORDER BY ", " LIMIT ", " OFFSET ", " RETURNING "):
         body = body.split(tail, 1)[0]
     return " ".join(body.split())
 

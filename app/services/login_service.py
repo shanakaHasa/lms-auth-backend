@@ -48,11 +48,21 @@ log = get_logger(__name__)
 
 
 class LoginResult:
-    def __init__(self, token: str, expires_in: int, scopes: frozenset[str], user: User) -> None:
+    def __init__(
+        self,
+        token: str,
+        expires_in: int,
+        scopes: frozenset[str],
+        user: User,
+        tenant_id: uuid.UUID,
+    ) -> None:
         self.token = token
         self.expires_in = expires_in
         self.scopes = scopes
         self.user = user
+        # Carried out so the caller can start a refresh family without
+        # resolving the slug a second time.
+        self.tenant_id = tenant_id
 
 
 class LoginService:
@@ -159,7 +169,7 @@ class LoginService:
             subject_user_id=user.id,
             metadata={"jti": claims["jti"], "sid": claims["sid"], "scopes": len(scopes)},
         )
-        return LoginResult(token, claims["exp"] - claims["iat"], scopes, user)
+        return LoginResult(token, claims["exp"] - claims["iat"], scopes, user, tenant.id)
 
     async def _deny(
         self,

@@ -15,7 +15,11 @@ os.environ.setdefault("LOG_LEVEL", "WARNING")
 os.environ.setdefault("ISSUER", "http://localhost:8001")
 os.environ.setdefault("AUDIENCE", "teachassist-api")
 os.environ.setdefault("SIGNER_BACKEND", "local")
-os.environ.setdefault("COOKIE_SECURE", "false")
+# Secure is valid on http://localhost -- browsers treat it as a secure
+# context -- and the refresh cookie uses the __Host- prefix, which browsers
+# SILENTLY DISCARD without it. Setting false here would test a
+# configuration that cannot work in a browser.
+os.environ.setdefault("COOKIE_SECURE", "true")
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://auth:auth@localhost:5432/authdb_test")
 # CI runs Postgres as a service container on localhost, where TLS is neither
 # available nor meaningful. Local runs against RDS override this to verify-full.

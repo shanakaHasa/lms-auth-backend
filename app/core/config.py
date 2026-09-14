@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     ip_throttle_window_seconds: int = 900
 
     # -- Cookies -----------------------------------------------------------
-    cookie_secure: bool = False
+    cookie_secure: bool = True
     cookie_samesite: Literal["lax", "strict", "none"] = "lax"
     refresh_cookie_name: str = "__Host-ta_rt"
     csrf_cookie_name: str = "__Host-ta_csrf"
@@ -120,6 +120,9 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _refuse_unsafe_production(self) -> Settings:
         if self.app_env != "prod":
+            problem = self._host_prefix_problem()
+            if problem:
+                raise ValueError(problem)
             if self.signer_backend == "azure_key_vault" and not self.key_vault_key_id:
                 raise ValueError("SIGNER_BACKEND=azure_key_vault requires KEY_VAULT_KEY_ID")
             return self
@@ -139,10 +142,40 @@ class Settings(BaseSettings):
             problems.append("KEY_VAULT_KEY_ID must be set")
         if self.cookie_samesite == "none" and not self.cookie_secure:
             problems.append("SAMESITE=none requires COOKIE_SECURE=true")
+        # Collected rather than raised, so a prod misconfiguration still reports
+        # every problem at once. Fixing five things one deploy at a time is how
+        # a config error becomes an afternoon.
+        if problem := self._host_prefix_problem():
+            problems.append(problem)
 
         if problems:
             raise ValueError("unsafe production configuration: " + "; ".join(problems))
         return self
+
+    def _host_prefix_problem(self) -> str | None:
+        """A `__Host-` cookie without `Secure` is SILENTLY DISCARDED.
+
+        No error and no warning: login appears to work and refresh simply never
+        does, with nothing in any log to explain it. Checked in every
+        environment, not just production, because the failure is hardest to
+        diagnose exactly where people iterate fastest.
+
+        `Secure` is fine on `http://localhost` -- browsers treat localhost as a
+        secure context -- so there is no development reason to allow it.
+        """
+        prefixed = [
+            name
+            for name in (self.refresh_cookie_name, self.csrf_cookie_name)
+            if name.startswith("__Host-")
+        ]
+        if prefixed and not self.cookie_secure:
+            return (
+                f"{', '.join(prefixed)} use the __Host- prefix, which browsers "
+                "only accept on a Secure cookie. Either set COOKIE_SECURE=true "
+                "or drop the prefix -- as configured the cookie would be "
+                "discarded silently."
+            )
+        return None
 
     @property
     def is_local(self) -> bool:

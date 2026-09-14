@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # Parallel. `gate` at the bottom is the single required status check, so
+  # adding a job here makes it blocking without touching branch protection.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy app
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      # An identity provider earns a higher floor than the LMS service.
+      - run: pytest tests/unit -q --cov=app --cov-report=term-missing
+
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      # Catches a model changed without a migration, and a migration whose
+      # object names do not match the models. No database required.
+      - run: python scripts/check_migration_drift.py
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: auth
+          POSTGRES_PASSWORD: auth
+          POSTGRES_DB: authdb_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U auth"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://auth:auth@localhost:5432/authdb_test
+      DB_SSL_MODE: disable
+      APP_ENV: local
+      ISSUER: http://localhost:8001
+      SIGNER_BACKEND: local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - name: Applies from empty
+        run: alembic upgrade head
+      - name: Rolls back
+        # A migration nobody can reverse is one nobody can deploy confidently.
+        run: alembic downgrade base
+      - name: Re-applies
+        run: alembic upgrade head
+      - name: No un-migrated model changes
+        run: alembic check
+      - name: Integration suite
+        run: pytest tests/integration -q
+
+  destructive-migration-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refuse a destructive migration without an explicit label
+        # Migrations run against the PREVIOUS version of the code, which is
+        # still serving. A drop or a rename breaks it. Expand/contract is the
+        # rule; this is what enforces it.
+        run: |
+          set -euo pipefail
+          if git diff --name-only origin/main...HEAD -- alembic/versions/ | grep -q .; then
+            if git diff origin/main...HEAD -- alembic/versions/ \
+                 | grep -E '^\+.*(drop_column|DROP COLUMN|SET NOT NULL|RENAME)' ; then
+              if ! echo '${{ join(github.event.pull_request.labels.*.name, ',') }}' \
+                   | grep -q 'contract-migration'; then
+                echo "::error::destructive migration without the contract-migration label"
+                exit 1
+              fi
+            fi
+          fi
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: teachassist-auth:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: teachassist-auth:ci
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+  gate:
+    if: always()
+    needs: [lint, test, drift, migrations, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any job did not succeed
+        run: |
+          echo '${{ toJSON(needs) }}' | grep -q '"result": *"failure"' && exit 1
+          echo '${{ toJSON(needs) }}' | grep -q '"result": *"cancelled"' && exit 1
+          exit 0

@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app"]
+
+[project]
+name = "teachassist-auth"
+version = "0.1.0"
+description = "Identity provider for TeachAssist: users, tenants, roles, RS256 tokens, JWKS"
+requires-python = ">=3.12"
+dependencies = [
+  # web
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.6",
+  "python-multipart>=0.0.12",       # OAuth2 token endpoint is form-encoded
+  # database
+  "sqlalchemy[asyncio]>=2.0.36",
+  "asyncpg>=0.30",
+  "alembic>=1.14",
+  # crypto
+  "pyjwt[crypto]>=2.9",
+  "cryptography>=43.0",
+  "argon2-cffi>=23.1",
+  # observability
+  "structlog>=24.4",
+  # cli
+  "typer>=0.15",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "pytest-cov>=6.0",
+  # Starlette's TestClient prefers httpx2; without it every test run emits a
+  # deprecation warning, and warnings nobody can fix get ignored.
+  "httpx2>=0.28",
+  "freezegun>=1.5",
+  "ruff>=0.8",
+  "mypy>=1.13",
+]
+
+[project.scripts]
+teachassist-auth = "app.cli:app"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "ASYNC", "S", "C4", "RUF", "T20"]
+# S101: assert is the point of a test file.
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+# N818 wants every exception to end in "Error". These deliberately mirror the
+# vocabulary they map onto instead: HTTP semantics (NotFound, Forbidden) and
+# OAuth2 error codes (InvalidGrant -> "invalid_grant", InvalidCredentials).
+# "InvalidGrantError" would obscure the one-to-one mapping to the spec, which is
+# the thing a reader actually needs to see.
+"app/core/errors.py" = ["N818"]
+# Hardcoded test credentials are fine; print() is fine in the CLI and scripts.
+"tests/*" = ["S105", "S106", "S107"]
+"app/cli.py" = ["T20"]
+"scripts/*" = ["T20"]
+"alembic/versions/*" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+exclude = ["alembic/versions/"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+  "integration: needs a real Postgres (testcontainers)",
+]

@@ -1,4 +1,4 @@
-.PHONY: help venv lock api migrate revision downgrade seed test test-unit test-int lint fmt typecheck check db-check clean
+.PHONY: help venv lock api migrate revision downgrade seed drift test test-unit test-int lint fmt typecheck check db-check clean
 
 # Cross-platform: GNU Make sets OS=Windows_NT on Windows. Without this, every
 # target is unusable on Linux -- which is where CI runs.
@@ -42,12 +42,12 @@ seed:      ## Seed a local institution with users
 
 # ── Quality ─────────────────────────────────────────────────────────────────
 
-test:      ## Everything
+test:      ## Unit suite (integration is excluded by default; see test-int)
 	$(PY) -m pytest
 test-unit: ## Unit only -- no database, runs anywhere, fast
 	$(PY) -m pytest tests/unit
-test-int:  ## Integration -- needs TEST_DATABASE_URL
-	$(PY) -m pytest tests/integration
+test-int:  ## Integration -- needs a real Postgres with migrations applied
+	$(PY) -m pytest tests/integration -m integration
 
 lint:      ## Lint
 	$(PY) -m ruff check .
@@ -56,7 +56,9 @@ typecheck: ## Type check
 fmt:       ## Format and autofix
 	$(PY) -m ruff format .
 	$(PY) -m ruff check --fix .
-check: lint typecheck test-unit  ## What CI runs before the integration stage
+drift:     ## Diff model DDL against migration DDL -- needs no database
+	$(PY) scripts/check_migration_drift.py
+check: lint typecheck drift test-unit  ## What CI runs before the integration stage
 
 clean:
 	rm -rf .pytest_cache .ruff_cache .mypy_cache htmlcov .coverage

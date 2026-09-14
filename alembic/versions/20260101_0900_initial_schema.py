@@ -421,6 +421,84 @@ def upgrade() -> None:
     _seed_reference_data()
 
 
+# ── Seed data, hoisted to module level so it can be asserted ────────────────
+#
+# A migration must never import application code: a later refactor would then
+# silently change what an old migration does to a database that already ran it.
+# So these are duplicated from `app/core/scopes.py` on purpose, and
+# `tests/unit/test_scopes.py` imports THIS MODULE by path and diffs the two.
+# Change both; the suite tells you when you have not.
+
+API_AUDIENCE = "teachassist-api"
+AUTH_AUDIENCE = "teachassist-auth"
+
+# key -> (description, audience, is_sensitive)
+#
+# Student records are personal information, so every scope that reaches them is
+# flagged -- an access review can then answer "who can read student PII"
+# without reading every role definition.
+SCOPE_CATALOGUE: dict[str, tuple[str, str, bool]] = {
+    "students:read": ("Read student records", API_AUDIENCE, True),
+    "students:write": ("Create and update student records", API_AUDIENCE, True),
+    "courses:read": ("Read courses", API_AUDIENCE, False),
+    "courses:write": ("Create and update courses", API_AUDIENCE, False),
+    "enrolments:write": ("Enrol and withdraw students", API_AUDIENCE, True),
+    "materials:read": ("Read course materials and policies", API_AUDIENCE, False),
+    "materials:write": ("Upload and delete course materials", API_AUDIENCE, False),
+    "chat:use": ("Use the assistant", API_AUDIENCE, False),
+    # Deliberately separate from students:write. A tutor may ask the assistant
+    # to prepare a change; only a teacher may commit it.
+    "proposals:approve": ("Approve a change the assistant proposed", API_AUDIENCE, True),
+    "admin:users:read": ("List users in the institution", AUTH_AUDIENCE, False),
+    "admin:users:write": ("Invite, disable and manage users", AUTH_AUDIENCE, False),
+    "admin:roles": ("Manage roles and grants", AUTH_AUDIENCE, False),
+    "admin:audit": ("Read the authentication audit log", AUTH_AUDIENCE, True),
+    "admin:tenant": ("Manage institution settings", AUTH_AUDIENCE, False),
+}
+
+# `courses:write` lives here, not in ADMIN_EXTRA_SCOPES: a teacher sets up
+# their own class. Listing it in both would put it in admin's default_scopes
+# TWICE -- text[] has no uniqueness constraint, so the migration would succeed
+# and provisioning would then violate pk_role_scopes (role_id, scope_key) at
+# the first create-tenant, a long way from the cause.
+TEACHER_SCOPES = (
+    "students:read",
+    "students:write",
+    "courses:read",
+    "courses:write",
+    "enrolments:write",
+    "materials:read",
+    "materials:write",
+    "chat:use",
+    "proposals:approve",
+)
+TUTOR_SCOPES = ("students:read", "courses:read", "materials:read", "chat:use")
+ADMIN_EXTRA_SCOPES = (
+    "admin:users:read",
+    "admin:users:write",
+    "admin:roles",
+    "admin:audit",
+    "admin:tenant",
+)
+ROLE_TEMPLATE_SCOPES: dict[str, tuple[str, ...]] = {
+    "admin": (*TEACHER_SCOPES, *ADMIN_EXTRA_SCOPES),
+    "teacher": TEACHER_SCOPES,
+    "tutor": TUTOR_SCOPES,
+}
+ROLE_TEMPLATE_META: dict[str, tuple[str, str]] = {
+    "admin": ("Administrator", "Full access within the institution."),
+    "teacher": (
+        "Teacher",
+        "Manages their own courses, students and materials, and approves "
+        "changes the assistant proposes.",
+    ),
+    "tutor": (
+        "Tutor",
+        "Read-only. May ask the assistant to prepare a change, but cannot approve one.",
+    ),
+}
+
+
 def _seed_reference_data() -> None:
     """Scopes and role templates.
 
@@ -435,104 +513,16 @@ def _seed_reference_data() -> None:
         sa.column("audience", sa.String),
         sa.column("is_sensitive", sa.Boolean),
     )
-
-    # Which service each scope is meaningful to. A scope for auth's own admin
-    # API must never end up authorising something in the LMS.
-    api = "teachassist-api"
-    auth = "teachassist-auth"
-
     op.bulk_insert(
         scopes,
         [
-            # Student records are personal information, so every scope that
-            # reaches them is flagged -- an access review can then answer "who
-            # can read student PII" without reading every role definition.
             {
-                "key": "students:read",
-                "description": "Read student records",
-                "audience": api,
-                "is_sensitive": True,
-            },
-            {
-                "key": "students:write",
-                "description": "Create and update student records",
-                "audience": api,
-                "is_sensitive": True,
-            },
-            {
-                "key": "courses:read",
-                "description": "Read courses",
-                "audience": api,
-                "is_sensitive": False,
-            },
-            {
-                "key": "courses:write",
-                "description": "Create and update courses",
-                "audience": api,
-                "is_sensitive": False,
-            },
-            {
-                "key": "enrolments:write",
-                "description": "Enrol and withdraw students",
-                "audience": api,
-                "is_sensitive": True,
-            },
-            {
-                "key": "materials:read",
-                "description": "Read course materials and policies",
-                "audience": api,
-                "is_sensitive": False,
-            },
-            {
-                "key": "materials:write",
-                "description": "Upload and delete course materials",
-                "audience": api,
-                "is_sensitive": False,
-            },
-            {
-                "key": "chat:use",
-                "description": "Use the assistant",
-                "audience": api,
-                "is_sensitive": False,
-            },
-            # Deliberately separate from students:write. A tutor may ask the
-            # assistant to prepare a change; only a teacher may commit it.
-            {
-                "key": "proposals:approve",
-                "description": "Approve a change the assistant proposed",
-                "audience": api,
-                "is_sensitive": True,
-            },
-            {
-                "key": "admin:users:read",
-                "description": "List users in the institution",
-                "audience": auth,
-                "is_sensitive": False,
-            },
-            {
-                "key": "admin:users:write",
-                "description": "Invite, disable and manage users",
-                "audience": auth,
-                "is_sensitive": False,
-            },
-            {
-                "key": "admin:roles",
-                "description": "Manage roles and grants",
-                "audience": auth,
-                "is_sensitive": False,
-            },
-            {
-                "key": "admin:audit",
-                "description": "Read the authentication audit log",
-                "audience": auth,
-                "is_sensitive": True,
-            },
-            {
-                "key": "admin:tenant",
-                "description": "Manage institution settings",
-                "audience": auth,
-                "is_sensitive": False,
-            },
+                "key": key,
+                "description": description,
+                "audience": audience,
+                "is_sensitive": is_sensitive,
+            }
+            for key, (description, audience, is_sensitive) in SCOPE_CATALOGUE.items()
         ],
     )
 
@@ -543,49 +533,16 @@ def _seed_reference_data() -> None:
         sa.column("description", sa.Text),
         sa.column("default_scopes", postgresql.ARRAY(sa.Text)),
     )
-
-    teacher_scopes = [
-        "students:read",
-        "students:write",
-        "courses:read",
-        "enrolments:write",
-        "materials:read",
-        "materials:write",
-        "chat:use",
-        "proposals:approve",
-    ]
-    tutor_scopes = ["students:read", "courses:read", "materials:read", "chat:use"]
-    admin_scopes = [
-        *teacher_scopes,
-        "courses:write",
-        "admin:users:read",
-        "admin:users:write",
-        "admin:roles",
-        "admin:audit",
-        "admin:tenant",
-    ]
-
     op.bulk_insert(
         templates,
         [
             {
-                "key": "admin",
-                "name": "Administrator",
-                "description": "Full access within the institution.",
-                "default_scopes": admin_scopes,
-            },
-            {
-                "key": "teacher",
-                "name": "Teacher",
-                "description": "Manages students and materials for their own courses, and approves proposed changes.",
-                "default_scopes": teacher_scopes,
-            },
-            {
-                "key": "tutor",
-                "name": "Tutor",
-                "description": "Read-only. May ask the assistant to prepare a change, but cannot approve one.",
-                "default_scopes": tutor_scopes,
-            },
+                "key": key,
+                "name": ROLE_TEMPLATE_META[key][0],
+                "description": ROLE_TEMPLATE_META[key][1],
+                "default_scopes": list(default_scopes),
+            }
+            for key, default_scopes in ROLE_TEMPLATE_SCOPES.items()
         ],
     )
 

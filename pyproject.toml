@@ -81,7 +81,13 @@ exclude = ["alembic/versions/"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-ra --strict-markers"
+# Integration tests need a real Postgres and are skipped by default, so a
+# `pytest` on a laptop runs green with nothing installed. CI opts back in with
+# `pytest tests/integration -m integration` once `alembic upgrade head` has run.
+addopts = "-ra --strict-markers -m 'not integration'"
 markers = [
-  "integration: needs a real Postgres (testcontainers)",
+  # Not testcontainers: CI runs Postgres as a service container, and Phase 2
+  # points these at a real database directly.
+  "integration: needs a real Postgres with migrations applied",
+  "serial: needs real commits, cannot run under transaction rollback",
 ]

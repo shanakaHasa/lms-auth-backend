@@ -39,7 +39,9 @@ class OAuthClient(Base, TimestampMixin):
     token_lifetime_seconds: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="600"
     )
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="active", server_default="active"
+    )
 
     secrets: Mapped[list[OAuthClientSecret]] = relationship(
         back_populates="client", cascade="all, delete-orphan"

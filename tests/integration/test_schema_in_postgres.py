@@ -34,6 +34,17 @@ async def _index_def(session: AsyncSession, name: str) -> str | None:
     return row.scalar_one_or_none()
 
 
+def _normalise(sql: str) -> str:
+    """Strip what Postgres adds when it echoes a predicate back.
+
+    `WHERE status = 'active'` comes back as `WHERE ((status)::text =
+    'active'::text)` — the casts and the parentheses are Postgres's, not ours.
+    Comparing raw text would make this test about pg_get_expr's formatting
+    rather than about the index.
+    """
+    return " ".join(sql.replace("::text", "").replace("(", " ").replace(")", " ").split())
+
+
 async def _constraint(session: AsyncSession, name: str) -> str | None:
     row = await session.execute(
         text("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = :name"),
@@ -100,7 +111,7 @@ async def test_only_one_signing_key_can_be_active(session: AsyncSession) -> None
     definition = await _index_def(session, "uq_signing_keys_one_active")
     assert definition is not None, "the index was never created"
     assert "UNIQUE" in definition
-    assert "status = 'active'" in definition.replace("::text", ""), definition
+    assert "status = 'active'" in _normalise(definition), definition
 
 
 # ── Composite foreign keys: the cross-tenant escalation guard ───────────────

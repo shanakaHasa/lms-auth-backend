@@ -44,17 +44,23 @@ class User(Base, TimestampMixin):
     password_hash: Mapped[str | None] = mapped_column(Text)
     password_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     full_name: Mapped[str | None] = mapped_column(String(255))
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="invited")
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="invited", server_default="invited"
+    )
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    failed_login_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_login_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Bumped to invalidate every outstanding access token for this user. Tokens
     # carry it as `tv`; a consumer rejects any token whose `tv` is behind. This
     # is the revocation predicate that does not depend on clock agreement.
-    token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    token_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
 
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

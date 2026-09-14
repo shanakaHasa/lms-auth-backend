@@ -55,8 +55,14 @@ class Settings(BaseSettings):
     clock_skew_leeway_seconds: int = 60
 
     # -- Signing -----------------------------------------------------------
-    signer_backend: Literal["local", "kms"] = "local"
-    kms_key_id: str | None = None
+    # `azure_key_vault`, not `kms`: the AWS name survived the move to Azure and
+    # made the production guard below unsatisfiable -- it demanded a backend
+    # that this platform has no implementation for.
+    signer_backend: Literal["local", "azure_key_vault"] = "local"
+    key_vault_key_id: str | None = None
+    # Wraps the private key before it reaches `signing_keys.private_key_encrypted`.
+    # Only the local signer needs it; Key Vault never exports a key to wrap.
+    local_key_encryption_key: str | None = None
     jwks_cache_ttl_seconds: int = 300
     # A new key must be visible in JWKS this long before it may sign anything,
     # or consumers caching the old key set will reject tokens they cannot verify.
@@ -114,8 +120,8 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _refuse_unsafe_production(self) -> Settings:
         if self.app_env != "prod":
-            if self.signer_backend == "kms" and not self.kms_key_id:
-                raise ValueError("SIGNER_BACKEND=kms requires KMS_KEY_ID")
+            if self.signer_backend == "azure_key_vault" and not self.key_vault_key_id:
+                raise ValueError("SIGNER_BACKEND=azure_key_vault requires KEY_VAULT_KEY_ID")
             return self
 
         problems: list[str] = []
@@ -127,10 +133,10 @@ class Settings(BaseSettings):
             problems.append("ISSUER must be https")
         if "localhost" in self.issuer or "127.0.0.1" in self.issuer:
             problems.append("ISSUER must not point at localhost")
-        if self.signer_backend != "kms":
-            problems.append("SIGNER_BACKEND must be kms")
-        if self.signer_backend == "kms" and not self.kms_key_id:
-            problems.append("KMS_KEY_ID must be set")
+        if self.signer_backend != "azure_key_vault":
+            problems.append("SIGNER_BACKEND must be azure_key_vault")
+        if self.signer_backend == "azure_key_vault" and not self.key_vault_key_id:
+            problems.append("KEY_VAULT_KEY_ID must be set")
         if self.cookie_samesite == "none" and not self.cookie_secure:
             problems.append("SAMESITE=none requires COOKIE_SECURE=true")
 

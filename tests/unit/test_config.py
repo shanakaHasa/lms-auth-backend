@@ -16,8 +16,8 @@ PROD_SAFE = {
     "app_env": "prod",
     "issuer": "https://auth.example.com",
     "cookie_secure": True,
-    "signer_backend": "kms",
-    "kms_key_id": "arn:aws:kms:ap-southeast-2:111122223333:key/abc",
+    "signer_backend": "azure_key_vault",
+    "key_vault_key_id": "https://kv-lms.vault.azure.net/keys/token-signing/abc123",
     "dev_seed_password": None,
     "_env_file": None,
 }
@@ -61,9 +61,14 @@ def test_prod_refuses_the_local_signer() -> None:
         _prod(signer_backend="local")
 
 
-def test_kms_signer_requires_a_key_id_everywhere() -> None:
-    with pytest.raises(ValidationError, match="KMS_KEY_ID"):
-        Settings(app_env="local", signer_backend="kms", kms_key_id=None, _env_file=None)  # type: ignore[arg-type]
+def test_the_key_vault_signer_requires_a_key_id_everywhere() -> None:
+    with pytest.raises(ValidationError, match="KEY_VAULT_KEY_ID"):
+        Settings(  # type: ignore[arg-type]
+            app_env="local",
+            signer_backend="azure_key_vault",
+            key_vault_key_id=None,
+            _env_file=None,
+        )
 
 
 def test_samesite_none_requires_secure() -> None:

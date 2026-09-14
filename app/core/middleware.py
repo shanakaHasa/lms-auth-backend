@@ -63,9 +63,15 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                 "Strict-Transport-Security",
                 "max-age=63072000; includeSubDomains; preload",
             )
-        # Nothing this service returns is cacheable, and tokens least of all.
-        response.headers["Cache-Control"] = "no-store"
-        response.headers["Pragma"] = "no-cache"
+        # Nothing this service returns is cacheable, and tokens least of all --
+        # with one exception. The discovery endpoints publish public key
+        # material and set their own `Cache-Control`, and a consumer that cannot
+        # cache JWKS refetches on every unknown `kid`. Plain assignment here
+        # would overwrite that, and the key-rotation rule ("publish for twice
+        # the cache TTL before signing") would rest on a header nobody received.
+        if not request.url.path.startswith("/.well-known/"):
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
 
         if request.url.path not in QUIET_PATHS:
             log.info(

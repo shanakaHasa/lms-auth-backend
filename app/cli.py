@@ -216,5 +216,66 @@ def seed_dev(
     raise typer.Exit(asyncio.run(_seed()))
 
 
+# ── Signing keys ────────────────────────────────────────────────────────────
+
+
+@app.command("rotate-key")
+def rotate_key(
+    first: bool = typer.Option(
+        False, "--first", help="Activate immediately. Only valid when no key exists yet."
+    ),
+    promote: str = typer.Option("", help="Promote this kid from pending to active."),
+) -> None:
+    """Generate, promote or inspect signing keys.
+
+    Rotation is deliberately two steps. `rotate-key` publishes a new key as
+    `pending` -- it appears in JWKS at once and signs nothing. Only after
+    consumers have had twice their cache TTL to notice it may `--promote` make
+    it active, and promote REFUSES if asked sooner. A runbook note saying "wait
+    ten minutes" is a note someone skips during an incident.
+
+    `--first` is the exception, for the very first key: there is nothing to
+    rotate away from and no consumer holding a key set that lacks it.
+    """
+    from app.core.db import SessionLocal, engine
+    from app.crypto.keywrap import resolve_kek
+    from app.repositories.signing_key import SqlSigningKeyRepository
+    from app.services.audit import SqlAuditSink
+    from app.services.key_service import KeyService
+
+    async def _run() -> int:
+        async with SessionLocal() as session:
+            service = KeyService(
+                SqlSigningKeyRepository(session),
+                SqlAuditSink(session),
+                kek=resolve_kek(),
+                min_publish_delay_seconds=max(
+                    settings.key_min_publish_delay_seconds,
+                    settings.jwks_cache_ttl_seconds * 2,
+                ),
+            )
+            if promote:
+                key = await service.promote(promote)
+                typer.secho(f"promoted {key.kid} to active", fg=typer.colors.GREEN)
+            else:
+                key = await service.generate(activate_immediately=first)
+                typer.secho(f"generated {key.kid} ({key.status})", fg=typer.colors.GREEN)
+                if not first:
+                    delay = max(
+                        settings.key_min_publish_delay_seconds,
+                        settings.jwks_cache_ttl_seconds * 2,
+                    )
+                    typer.echo(f"  published in JWKS now; promotable in {delay}s")
+            await session.commit()
+
+            typer.echo("  key set now published:")
+            for published in await service.repo.published():
+                typer.echo(f"    {published.status:<9} {published.kid}")
+        await engine.dispose()
+        return 0
+
+    raise typer.Exit(asyncio.run(_run()))
+
+
 if __name__ == "__main__":
     app()

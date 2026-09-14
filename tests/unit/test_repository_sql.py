@@ -27,6 +27,7 @@ from sqlalchemy.sql import Select
 
 import app.repositories as repositories_pkg
 from app.repositories import role as role_repo
+from app.repositories import signing_key as key_repo
 from app.repositories import tenant as tenant_repo
 from app.repositories import user as user_repo
 
@@ -64,6 +65,11 @@ TENANT_SCOPED = {
 GLOBAL = {
     "tenant.stmt_tenant_by_slug": tenant_repo.stmt_tenant_by_slug("northgate"),
     "tenant.stmt_tenant_by_id": tenant_repo.stmt_tenant_by_id(TENANT),
+    # Signing keys belong to the service, not to an institution. A tenant
+    # filter here would make key lookup return nothing.
+    "signing_key.stmt_active_key": key_repo.stmt_active_key(),
+    "signing_key.stmt_published_keys": key_repo.stmt_published_keys(),
+    "signing_key.stmt_key_by_kid": key_repo.stmt_key_by_kid("abc"),
 }
 
 
@@ -255,3 +261,28 @@ def test_no_statement_is_in_both_buckets() -> None:
     # Tenant-scoped and global are contradictory claims: one asserts the tenant
     # is present, the other that it is absent.
     assert not set(TENANT_SCOPED) & set(GLOBAL)
+
+
+# ── Key publication: wider than the active key, deliberately ────────────────
+
+
+def test_the_published_key_set_is_wider_than_the_active_key() -> None:
+    """The classic rotation outage is publishing only the active key.
+
+    A consumer holding a cached JWKS needs the OLD key to verify tokens already
+    in flight, and the NEW one to be there before the first token signed with it
+    arrives. Publishing only `active` breaks both ends of the window.
+    """
+    published = sql(GLOBAL["signing_key.stmt_published_keys"])
+    for status in ("pending", "active", "retiring"):
+        assert f"'{status}'" in published, status
+
+
+def test_a_revoked_key_is_never_published() -> None:
+    # `revoked` is the state for a key believed compromised. Continuing to
+    # publish it would defeat revoking it.
+    assert "'revoked'" not in sql(GLOBAL["signing_key.stmt_published_keys"])
+
+
+def test_only_one_key_can_be_selected_as_active() -> None:
+    assert "status = 'active'" in sql(GLOBAL["signing_key.stmt_active_key"])
